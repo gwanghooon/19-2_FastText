@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
+
 from util import *
 import time
 import copy
@@ -18,6 +19,7 @@ parser.add_argument('--num_epoch', type = int, default = 20, help = 'num of epoc
 parser.add_argument('--learning_rate', type = float, default = 1e-2, help = 'learning rate')
 parser.add_argument('--batch_size', type = int, default = 32, help = 'batch size')
 parser.add_argument('--momentum', type = float, default = 0.9, help = 'momentum')
+parser.add_argument('--val_split', type = float, default = 0.2, help = 'val_split')
 
 args = parser.parse_args()
 
@@ -34,20 +36,6 @@ class TextClassifier(nn.Module):
         output = self.hidden_layer(embedded)
         return self.output_layer(output)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-HIDDEN_DIM = args.hidden_dim
-NUM_CLASS = len(set(dataDict['test_Y']))
-NUM_EPOCH = args.num_epoch
-LEARN_RATE = args.learning_rate
-BATCH_SIZE = args.batch_size
-
-model = TextClassifier(VOCAB_SIZE,HIDDEN_DIM,NUM_CLASS).to(device)
-criterion = nn.NLLLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=LEARN_RATE, momentum = args.momentum)
-scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-
-dataloaders = {x: DataLoader(dataset=TrainDataset(), batch_size=32, shuffle=True, num_workers=2) for x in ['train','val']}
-#test_lodaer  = DataLoader(dataset=TestDataset(), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
 
 def train_model(model, criterion, optimizer, scheduler, num_epochs):
     since = time.time()
@@ -107,10 +95,26 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs):
         time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
 
-    # 가장 나은 모델 가중치를 불러옴
     model.load_state_dict(best_model_wts)
     return model
 
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+HIDDEN_DIM = args.hidden_dim
+NUM_CLASS = len(set(dataDict['test_Y']))
+NUM_EPOCH = args.num_epoch
+LEARN_RATE = args.learning_rate
+BATCH_SIZE = args.batch_size
+MOMENTUM = args.momentum
+VAL_SPLIT = args.val_split
+
+dataloaders= split_Data(TrainDataset(),VAL_SPLIT,BATCH_SIZE)
+#test_lodaer  = DataLoader(dataset=TestDataset(), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+
+model = TextClassifier(VOCAB_SIZE,HIDDEN_DIM,NUM_CLASS).to(device)
+criterion = nn.NLLLoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=LEARN_RATE, momentum = MOMENTUM)
+scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
 best_model = train_model(model, criterion, optimizer, scheduler, NUM_EPOCH)
 torch.save(model.state_dict(), 'model/model.pth')
