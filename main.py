@@ -1,19 +1,27 @@
 import os
 import argparse
 import numpy as np
+import pickle
+
+
+import time
+import copy
+
+from sklearn.feature_extraction import FeatureHasher
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
 
-from util import *
-import time
-import copy
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument('--data_name', type = str, help = 'dataset name')
 parser.add_argument('--hidden_dim', type = int, default = 10, help = 'num of hidden nodes')
 parser.add_argument('--num_epoch', type = int, default = 20, help = 'num of epochs')
 parser.add_argument('--learning_rate', type = float, default = 1e-2, help = 'learning rate')
@@ -22,6 +30,70 @@ parser.add_argument('--momentum', type = float, default = 0.9, help = 'momentum'
 parser.add_argument('--val_split', type = float, default = 0.2, help = 'val_split')
 
 args = parser.parse_args()
+
+def make_Vocab(docs):
+    word2index={'<unk>' : 0}
+    for doc in docs:
+        for token in doc:
+            if word2index.get(token)==None:
+                word2index[token]=len(word2index)
+    return word2index
+
+def make_Dict(tokens):
+    Doc = dict()
+    for t in tokens:
+        try :
+            Doc[t] += 1
+        except:
+            Doc[t] = 1
+    return Doc
+
+def split_Data(dataset,val_split,batch_size):
+
+    dataset_size = len(dataset)
+    indices = list(range(dataset_size))
+    split = int(np.floor(val_split * dataset_size))
+    random_seed = 42
+    np.random.seed(random_seed)
+    np.random.shuffle(indices)
+    train_indices, val_indices = indices[split:], indices[:split]
+
+    train_sampler = SubsetRandomSampler(train_indices)
+    valid_sampler = SubsetRandomSampler(val_indices)
+
+    train_loader = DataLoader(dataset=dataset, batch_size=batch_size, num_workers=2, sampler = train_sampler)
+    valid_loader = DataLoader(dataset=dataset, batch_size=batch_size, num_workers=2, sampler = valid_sampler)
+
+    dataloaders= {'train':train_loader,'val':valid_loader}
+
+    return dataloaders
+
+class TrainDataset(Dataset):
+    
+    def __init__(self):
+
+        self.H = Hasher.transform(train_Xd)
+        self.y_data = torch.from_numpy(np.array(dataDict['train_Y']))
+        
+    def __getitem__(self,index):
+        return torch.from_numpy(self.H[index].toarray()[0]), self.y_data[index]
+    
+    def __len__(self):
+        return self.H.shape[0]
+
+
+class TestDataset(Dataset):
+    
+    def __init__(self):
+
+        self.H = Hasher.transform(test_Xd)
+        self.y_data = torch.from_numpy(np.array(dataDict['test_Y']))
+        
+    def __getitem__(self,index):
+        return torch.from_numpy(self.H[index].toarray()[0]), self.y_data[index]
+    
+    def __len__(self):
+        return self.H.shape[0]  
 
 class TextClassifier(nn.Module):
     def __init__(self,vocab_size,hidden_dim,num_class):
@@ -89,15 +161,27 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs):
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
                 
+        time_elapsed = time.time() - since
+        print('Training Epoch complete in {:.0f}m {:.0f}s'.format(
+            time_elapsed // 60, time_elapsed % 60))
         print()
-    time_elapsed = time.time() - since
-    print('Training complete in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60))
+
     print('Best val Acc: {:4f}'.format(best_acc))
 
     model.load_state_dict(best_model_wts)
     return model
 
+file_name = args.data_name+'.pickle'
+with open(os.path.join('data',file_name), 'rb') as f:
+            dataDict = pickle.load(f) 
+        
+W2I = make_Vocab(dataDict['test_X'])
+
+train_Xd = [make_Dict(x) for x in dataDict['train_X']]
+test_Xd = [make_Dict(x) for x in dataDict['test_X']]
+
+VOCAB_SIZE = min(len(W2I),10000000)
+Hasher = FeatureHasher(n_features=VOCAB_SIZE).fit(train_Xd)   
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 HIDDEN_DIM = args.hidden_dim
@@ -108,6 +192,7 @@ BATCH_SIZE = args.batch_size
 MOMENTUM = args.momentum
 VAL_SPLIT = args.val_split
 
+
 dataloaders= split_Data(TrainDataset(),VAL_SPLIT,BATCH_SIZE)
 #test_lodaer  = DataLoader(dataset=TestDataset(), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
 
@@ -117,6 +202,8 @@ optimizer = torch.optim.SGD(model.parameters(), lr=LEARN_RATE, momentum = MOMENT
 scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
 best_model = train_model(model, criterion, optimizer, scheduler, NUM_EPOCH)
-torch.save(model.state_dict(), 'model/model.pth')
+
+model_name = args.data_name+'_model.pth'
+torch.save(best_model.state_dict(), os.path.join('model',model_name))
 
 
